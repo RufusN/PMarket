@@ -1,0 +1,7 @@
+api.py
+keys.env
+keys.py
+*.pycache
+*.parquet
+*.pyc
+*.csv
