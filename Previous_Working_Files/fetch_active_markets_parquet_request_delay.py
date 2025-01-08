@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import sys
 import json
 import time
@@ -7,8 +9,13 @@ from datetime import datetime
 from py_clob_client.client import ClobClient
 from keys import pass_key  # Import the API key
 import math
+import argparse  # Import for command-line argument parsing
 
+# Constants
 MINIMUM_SAMPLE_SIZE = 20
+MIN_TIME_INTERVAL = 1  # Minimum time interval in minutes
+DEFAULT_MAX_THREADS = 10  # Default number of threads (not used in non-parallel script)
+MIN_VOLUME = 1000  # Minimum volume for a market to be considered
 
 # Initialize client
 host = "https://clob.polymarket.com"
@@ -21,6 +28,7 @@ client = ClobClient(
 )
 
 def fetch_markets():
+    """Fetches all markets from the API, handling pagination."""
     markets_list = []
     next_cursor = None
     while True:
@@ -34,6 +42,9 @@ def fetch_markets():
             if 'data' not in response or not response['data']:
                 print("No data found in response.")
                 break
+            # if 'data' in response and response['data']:
+            #     print(response.values())
+            #     break
 
             markets_list.extend(response['data'])
 
@@ -99,30 +110,61 @@ def calculate_expected_points(start_ts, end_ts, fidelity_minutes):
     expected_points = math.floor(total_seconds / fidelity_seconds) + 1  # +1 to include both start and end
     return expected_points
 
+def parse_arguments():
+    """
+    Parses command-line arguments.
+    
+    Returns:
+        argparse.Namespace: Parsed arguments.
+    """
+    parser = argparse.ArgumentParser(
+        description="Fetch and process time series data for tokens from Polymarket."
+    )
+    parser.add_argument(
+        "time_interval_in_minutes",
+        nargs='?',
+        type=int,
+        default=MIN_TIME_INTERVAL,
+        help=f"Time interval in minutes (default: {MIN_TIME_INTERVAL}). Must be a positive integer."
+    )
+    parser.add_argument(
+        "duration_in_weeks",
+        nargs='?',
+        type=float,
+        default=None,
+        help="Duration in weeks to fetch data for (default: entire history). Must be a positive number."
+    )
+    return parser.parse_args()
+
 if __name__ == "__main__":
     # -----------------------------------------------------------------------
     # USAGE:
-    # python X.py <time_interval_in_minutes> [duration_in_weeks]
+    # python X.py [time_interval_in_minutes] [duration_in_weeks]
     #
-    # If duration_in_weeks is omitted, we fetch the entire history (start_time=0).
+    # - If time_interval_in_minutes is omitted, use MIN_TIME_INTERVAL.
+    # - If duration_in_weeks is omitted, fetch the entire history (start_time=0).
     # -----------------------------------------------------------------------
 
-    if len(sys.argv) < 2:
-        print("Usage: python X.py <time_interval_in_minutes> [duration_in_weeks]")
-        sys.exit(1)
+    # 1) Optional: time_interval_in_minutes
+    args = parse_arguments()
+    time_interval_in_minutes = args.time_interval_in_minutes  # Default value
+    duration_in_weeks = args.duration_in_weeks  # Default value
 
-    # 1) Required: time_interval_in_minutes
-    try:
-        time_interval_in_minutes = int(sys.argv[1])
-        if time_interval_in_minutes <= 0:
-            raise ValueError("time_interval_in_minutes must be a positive integer.")
-    except ValueError as e:
-        print(f"Error with time_interval_in_minutes: {e}")
-        sys.exit(1)
+    if len(sys.argv) >= 2:
+        try:
+            time_interval_input = int(sys.argv[1])
+            if time_interval_input <= 0:
+                raise ValueError("time_interval_in_minutes must be a positive integer.")
+            time_interval_in_minutes = max(time_interval_input, MIN_TIME_INTERVAL)
+            if time_interval_input < MIN_TIME_INTERVAL:
+                print(f"Provided time_interval_in_minutes ({time_interval_input}) is less than the minimum "
+                      f"({MIN_TIME_INTERVAL}). Using {MIN_TIME_INTERVAL} instead.")
+        except ValueError as e:
+            print(f"Error with time_interval_in_minutes: {e}")
+            sys.exit(1)
 
     # 2) Optional: duration_in_weeks
-    #    If not provided, we fetch from start_time=0 (i.e. earliest data).
-    duration_in_weeks = None
+    #    If not provided, use "max" (start_time=0).
     if len(sys.argv) > 2:
         try:
             duration_in_weeks = float(sys.argv[2])
@@ -144,6 +186,11 @@ if __name__ == "__main__":
 
     # Calculate expected number of data points
     expected_num_points = calculate_expected_points(start_time, end_time, time_interval_in_minutes)
+    print(f"Time Interval: {time_interval_in_minutes} minute(s)")
+    if duration_in_weeks is not None:
+        print(f"Duration: Last {duration_in_weeks} week(s)")
+    else:
+        print("Duration: Entire history (start_time=0)")
     print(f"Expected number of data points per token: {expected_num_points}")
 
     # Fetch markets
@@ -154,13 +201,14 @@ if __name__ == "__main__":
     tradable_markets = [
         m for m in markets if m.get('enable_order_book', True)
     ]
+
     
     if not tradable_markets:
         print("No tradable markets found.")
         sys.exit(0)
 
     # Example: use all tradable markets (remove or reduce as needed)
-    tradable_markets = tradable_markets[:200]
+    tradable_markets = tradable_markets[:100]  # This line doesn't alter the list; adjust as needed
 
     # Prepare a list to hold all rows
     all_data_rows = []
@@ -168,7 +216,21 @@ if __name__ == "__main__":
     for market in tradable_markets:
         market_id = market.get('condition_id')
         market_name = market.get('question', 'unknown_market')
+        market_tags = market.get('tags', [])
+        market_end_date = market.get('end_date_iso', 'unknown_date')
+        market_vol = market.get('volume_num_min', 'unknown_volume')
+
+        # extracted_market = {
+        #             "market_id": market.get("condition_id"),
+        #             "market_name": market.get("question"),
+        #             "description": market.get("description"),
+        #             "tags": market.get("tags"),
+        #             "end_date": market.get("end_date_iso"),
+        #             "volume": sum(token.get("price", 0) for token in market.get("tokens", [])),  # Example aggregation
+        #         }
         print(f"\nProcessing market: {market_name} (ID: {market_id})")
+        print(f"\nMarket tags: {market_tags} (End date: {market_end_date})")
+        print(market_vol)
         
         tokens = market.get('tokens', [])
         if not tokens:
@@ -181,7 +243,7 @@ if __name__ == "__main__":
                 print(f"No token ID for token in market: {market_name}")
                 continue
 
-            # print(f"Fetching time series data for token {token_id}...")
+            # Fetch time series data
             time_series_data = fetch_time_series(
                 token_id=token_id,
                 start_ts=start_time,
@@ -196,37 +258,61 @@ if __name__ == "__main__":
                     print(f"No data for token {token_id} within the last {duration_in_weeks} weeks.")
                 else:
                     print(f"No data for token {token_id}. (Older or inactive market, or request failed.)")
-                continue
+                continue  # Skip this token
 
             # Calculate actual number of data points
             actual_num_points = len(time_series_data)
-            # print(f"Fetched {actual_num_points} data points for token {token_id}.")
 
             # Validate the length of the fetched data
-            # if actual_num_points < expected_num_points:
             if actual_num_points < MINIMUM_SAMPLE_SIZE:
-                # print(f"Error: Token {token_id} has fewer data points ({actual_num_points}) than expected ({expected_num_points}). Skipping this token.")
+                # Optionally, log this event
+                print(f"Token {token_id} has fewer data points ({actual_num_points}) than minimum required ({MINIMUM_SAMPLE_SIZE}). Skipping this token.")
                 continue  # Skip this token
 
-            # If desired, you can allow a small tolerance, e.g., allow missing up to 5%
-            # tolerance = 0.95
-            # if actual_num_points < expected_num_points * tolerance:
-            #     print(f"Error: Token {token_id} has fewer data points ({actual_num_points}) than expected ({expected_num_points}). Skipping this token.")
-            #     continue
-
+            # Accumulate timestamps and prices
             timestamps = []
             prices = []
-            # Accumulate rows in our list
-            # time_series_data_sorted = sorted(time_series_data, key=lambda x: x["t"])
             for point in time_series_data:
                 timestamps.append(point["t"])
                 prices.append(point["p"])
+
+            # Create a pandas Series for the price, indexed by timestamp
+            try:
+                # Convert Unix timestamps to pandas datetime
+                series = pd.Series(data=prices, index=pd.to_datetime(timestamps, unit='s'))
+            except Exception as e:
+                print(f"Error converting timestamps to datetime for token {token_id}: {e} - skipping.")
+                continue  # Skip this token
+
+            # # Check if there are at least two timestamps to compare
+            # if len(series) >= 2:
+            #     # Compare the last timestamp with the penultimate timestamp
+            #     last_timestamp = series.index[-1]
+            #     penultimate_timestamp = series.index[-2]
+            #     if last_timestamp == penultimate_timestamp:
+            #         # Remove the last timestamp
+            #         series = series.iloc[:-1]
+            #         print('Duplicate found and removed (-1 timestep)')
+                    # print(f"Token {token_id}: Removed the last timestamp as it duplicates the penultimate timestamp.")
+
+            # Remove duplicate timestamps by keeping the first occurrence
+            duplicate_count = series.index.duplicated().sum()
+            if duplicate_count > 0:
+                print(f"Token {token_id} has {duplicate_count} duplicate timestamps. Removing duplicates.")
+                series = series[~series.index.duplicated(keep='first')]
+
+            # Check for zero variance
+            if series.std() == 0:
+                print(f"Token {token_id} has zero variance - skipping this token.")
+                continue  # Skip this token
+
+            # If all checks pass, add a single entry with arrays for timestamps and prices
             all_data_rows.append({
                 "market_id": market_id,
                 "market_name": market_name,
                 "token_id": token_id,
-                "timestamp": timestamps,
-                "price": prices
+                "timestamps": timestamps,  # List of integers
+                "prices": prices  # List of floats
             })
 
     # Once done, convert to a DataFrame and write to Parquet
@@ -234,7 +320,7 @@ if __name__ == "__main__":
         df = pd.DataFrame(all_data_rows)
         parquet_filename = "time_series_data.parquet"
         try:
-            df.to_parquet(parquet_filename, index=False)
+            df.to_parquet(parquet_filename, index=False, engine='pyarrow')
             print(f"\nAll time series data written to {parquet_filename}.")
         except Exception as e:
             print(f"Error saving Parquet file: {e}")

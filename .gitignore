@@ -5,3 +5,4 @@ keys.py
 *.parquet
 *.pyc
 *.csv
+*.json

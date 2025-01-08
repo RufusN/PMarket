@@ -6,12 +6,7 @@ import os
 import numpy as np
 from statsmodels.tsa.stattools import coint
 import warnings
-# Import your stationarity check function
-# Ensure this module is accessible or adjust the import as needed
 from stationarity_checks import check_stationarity
-
-# Define a minimum sample size for ADF test
-# MIN_SAMPLE_SIZE = 20
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -45,6 +40,12 @@ def parse_args():
         type=str,
         default="cointegration_results.csv",
         help="Path to save the cointegration results as a CSV file (default: 'cointegration_results.csv')."
+    )
+    parser.add_argument(
+        "--min_overlap",
+        type=int,
+        default=20,
+        help="Minimum number of overlapping data points required for analysis (default: 20)."
     )
     return parser.parse_args()
 
@@ -87,15 +88,16 @@ def load_time_series(parquet_path):
             print(f"Row {idx}: Error converting timestamps to datetime - {e} - skipping.")
             continue
 
-        # # Check if the series has sufficient data points
-        # if len(series) < MIN_SAMPLE_SIZE:
-        #     print(f"Row {idx}: Token {token_id} has insufficient data points ({len(series)}). Expected: {MIN_SAMPLE_SIZE} - skipping.")
-        #     continue
+        # # Remove duplicate timestamps by keeping the first occurrence
+        # duplicate_count = series.index.duplicated().sum()
+        # if duplicate_count > 0:
+        #     print(f"Row {idx}: Token {token_id} has {duplicate_count} duplicate timestamps. Removing duplicates.")
+        #     series = series[~series.index.duplicated(keep='first')]
 
-        # Check for zero variance
-        if series.std() == 0:
-            print(f"Row {idx}: Token {token_id} has zero variance - skipping.")
-            continue
+        # # Check for zero variance
+        # if series.std() == 0:
+        #     print(f"Row {idx}: Token {token_id} has zero variance - skipping.")
+        #     continue
 
         token_series[token_id] = {
             "market_id": market_id,
@@ -106,7 +108,7 @@ def load_time_series(parquet_path):
     print(f"Loaded {len(token_series)} tokens with valid time series data.")
     return token_series
 
-def find_cointegrated_pairs(token_series, corr_threshold=0.8, pval_threshold=0.05):
+def find_cointegrated_pairs(token_series, corr_threshold=0.8, pval_threshold=0.05, min_overlap=20):
     """
     Iterate over all unique pairs of tokens from different markets,
     compute correlation, and perform cointegration tests.
@@ -130,26 +132,43 @@ def find_cointegrated_pairs(token_series, corr_threshold=0.8, pval_threshold=0.0
         seriesA = token_series[tokA]["series"]
         seriesB = token_series[tokB]["series"]
 
+        # # Ensure both series have unique timestamps (redundant if already handled)
+        # seriesA = seriesA[~seriesA.index.duplicated(keep='first')]
+        # seriesB = seriesB[~seriesB.index.duplicated(keep='first')]
+
         # Align the two series on their timestamps (intersection)
-        aligned = pd.concat([seriesA, seriesB], axis=1).dropna()
-        # if aligned.empty:
-        #     print(f"No overlapping timestamps for {tokA} & {tokB} - skipping.")
-        #     continue
+        aligned = pd.concat([seriesA, seriesB], axis=1, join='inner').dropna()
+
+        if aligned.empty:
+            # No overlapping timestamps after alignment
+            # Optionally, you can print a message or log this event
+            # print(f"No overlapping timestamps for {tokA} & {tokB} - skipping.")
+            continue
+
+        # Check if the number of overlapping points meets the minimum requirement
+        if len(aligned) < min_overlap:
+            print(f"Pair {tokA} & {tokB}: Only {len(aligned)} overlapping data points - below minimum {min_overlap}. Skipping.")
+            continue
 
         alignedA = aligned.iloc[:, 0]
         alignedB = aligned.iloc[:, 1]
 
-        # Compute Pearson correlation
+        # Check for zero standard deviation in either series
         stdA = alignedA.std()
         stdB = alignedB.std()
 
+        # if stdA == 0 or stdB == 0:
+        #     print(f"Pair {tokA} & {tokB}: Zero standard deviation detected (stdA: {stdA}, stdB: {stdB}) - skipping.")
+        #     continue
+
+        # Compute Pearson correlation
         corr = alignedA.corr(alignedB)
         if pd.isna(corr):
             print(f"Correlation between {tokA} & {tokB} is NaN - skipping.")
             continue
 
-        if corr < corr_threshold:
-            continue  # Skip pairs below the correlation threshold
+        # if abs(corr) < corr_threshold:
+        #     continue  # Skip pairs below the correlation threshold
 
         # Perform stationarity checks
         stationarityA = check_stationarity(alignedA, alpha=0.05)
@@ -190,6 +209,7 @@ def find_cointegrated_pairs(token_series, corr_threshold=0.8, pval_threshold=0.0
                 "cointegrated": True  # Since pvalue < pval_threshold
             }
             coint_results.append(coint_result)
+            # Optional: Print or log the cointegrated pair
             # print(f"Cointegrated pair found: {tokA} ({coint_result['market_1_name']}) & {tokB} ({coint_result['market_2_name']}) with p-value {pvalue:.5f}")
 
     print(f"\nFound {len(coint_results)} cross-market cointegrated pairs with correlation >= {corr_threshold} and passed stationarity checks.")
@@ -215,7 +235,8 @@ def main():
     coint_results = find_cointegrated_pairs(
         token_series,
         corr_threshold=args.corr_threshold,
-        pval_threshold=args.pval_threshold
+        pval_threshold=args.pval_threshold,
+        min_overlap=args.min_overlap
     )
 
     # Convert results to DataFrame
