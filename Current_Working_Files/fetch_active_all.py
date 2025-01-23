@@ -128,6 +128,34 @@ def process_markets_and_calculate_volume(markets, start_ts, end_ts, fidelity):
             # Fetch time-series data for the token
             ts_data = fetch_time_series(token_id, start_ts, end_ts, fidelity)
 
+            # Process time-series data
+            # if ts_data:
+            #     try:
+            #         import pandas as pd
+
+            #         # Convert time series data to a Pandas DataFrame
+            #         df = pd.DataFrame(ts_data)
+            #         df.rename(columns={"t": "timestamp", "p": "price"}, inplace=True)
+            #         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+            #         df.set_index("timestamp", inplace=True)
+
+            #         # Remove duplicate timestamps by keeping the first occurrence
+            #         duplicate_count = df.index.duplicated().sum()
+            #         if duplicate_count > 0:
+            #             print(f"Token {token_id} has {duplicate_count} duplicate timestamps. Removing duplicates.")
+            #             df = df[~df.index.duplicated(keep="first")]
+
+            #         # Check for zero variance
+            #         if df["price"].std() == 0:
+            #             print(f"Token {token_id} has zero variance - skipping this token.")
+            #             continue  # Skip this token
+
+            #         # Convert back to list of dicts for JSON compatibility
+            #         ts_data = [{"t": int(ts.timestamp()), "p": price} for ts, price in df["price"].items()]
+            #     except Exception as e:
+            #         print(f"Error processing time series for token_id {token_id}: {e}")
+            #         continue
+
             tokens_data.append({
                 "token_id": token_id,
                 "time_series": ts_data
@@ -183,6 +211,11 @@ if __name__ == "__main__":
     time_interval_in_minutes = args.time_interval_in_minutes
     duration_in_weeks = args.duration_in_weeks
     output_file = args.output
+    print(f"Time Interval: {time_interval_in_minutes} minute(s)")
+    if duration_in_weeks is not None:
+        print(f"Duration: Last {duration_in_weeks} week(s)")
+    else:
+        print("Duration: Entire history (start_time=0)")
 
     # Calculate start and end times
     end_time = int(time.time())
@@ -202,7 +235,7 @@ if __name__ == "__main__":
     print("Sorting markets by total trade volume...")
     sorted_markets = sorted(processed_markets, key=lambda x: x["total_volume"], reverse=True)
 
-    sorted_markets = sorted_markets[:250]  # Limit to a minimum sample size
+    sorted_markets = sorted_markets[:800]  # Limit to a minimum sample size
 
     print("Saving sorted markets to JSON...")
     save_to_json(sorted_markets, output_file=output_file)

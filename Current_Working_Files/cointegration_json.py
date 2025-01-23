@@ -38,13 +38,16 @@ def load_time_series_from_json(json_path):
             try:
                 timestamps = [point["t"] for point in time_series]
                 prices = [point["p"] for point in time_series]
+                if prices and (prices[-1] < 0.05 or prices[-1] > 0.95):
+                    print(f"Skipping token {token_id} with price {prices[-1]}")
+                    continue
                 series = pd.Series(data=prices, index=pd.to_datetime(timestamps, unit='s'))
             except Exception as e:
                 print(f"Error processing time series for token {token_id}: {e}")
                 continue
 
             # Combine series into a DataFrame
-            column_name = f"{market_id}_{token_id}"  # Create unique column name
+            column_name = f"{token_id}"  # Create unique column name
             combined_data[column_name] = series
 
             # Store market metadata for each column
@@ -60,7 +63,7 @@ def load_time_series_from_json(json_path):
     return combined_df, market_metadata
 
 
-def filter_and_calculate_correlations_masked(data, market_metadata, corr_threshold=0.8, pval_threshold=0.05):
+def filter_and_calculate_correlations_masked(data, market_metadata, corr_threshold, pval_threshold):
     """
     Compute correlations and perform cointegration tests for pairs of tokens from different markets.
     """
@@ -194,7 +197,7 @@ def plot_cointegrated_residuals(data, coint_df):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Perform correlation and cointegration analysis on a JSON file.")
     parser.add_argument("--input", required=True, help="Path to the input JSON file.")
-    parser.add_argument("--corr_threshold", type=float, default=0.8, help="Correlation threshold (default: 0.8).")
+    parser.add_argument("--corr_threshold", type=float, default=0.9, help="Correlation threshold (default: 0.9).")
     parser.add_argument("--pval_threshold", type=float, default=0.01, help="P-value threshold (default: 0.01).")
 
     args = parser.parse_args()
